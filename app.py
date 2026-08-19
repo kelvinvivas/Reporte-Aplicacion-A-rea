@@ -16,7 +16,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 
-st.set_page_config(page_title="Aplicación aérea AgNav", page_icon="🚁", layout="wide")
+st.set_page_config(page_title="Aplicación aérea Montelimar", page_icon="🚁", layout="wide")
 
 VERDE="#4CAF18"
 AMARILLO="#FFD700"
@@ -273,7 +273,7 @@ def make_pdf(r,img,name,swath,source):
     out.seek(0)
     return out
 
-st.title("🚁 Calidad de Aplicación Aérea AgNav")
+st.title("🚁 Calidad de Aplicación Aérea Montelimar")
 st.write(
     "Sube el ZIP del plano y el ZIP del AgNav. El sistema calcula el área geométrica real, "
     "cobertura, traslape, sin aplicar y fuera de área."
