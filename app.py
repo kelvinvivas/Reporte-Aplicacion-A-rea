@@ -190,88 +190,416 @@ def overlap_vector(r):
     geom=unary_union(geoms).intersection(r["field"])
     return None if geom.is_empty else geom
 
-def make_map(r,crs,name):
-    fig,ax=plt.subplots(figsize=(11.5,6.3))
+
+def _nice_scale_length(width_m):
+    target = max(width_m * 0.28, 1)
+    power = 10 ** np.floor(np.log10(target))
+    value = target / power
+    if value < 1.5:
+        nice = 1
+    elif value < 3.5:
+        nice = 2
+    elif value < 7.5:
+        nice = 5
+    else:
+        nice = 10
+    return nice * power
+
+
+def make_map(r, crs, name):
+    from matplotlib.ticker import FuncFormatter
+    from matplotlib.patches import Patch, Rectangle
+
+    fig, ax = plt.subplots(figsize=(9.2, 7.0))
 
     if not r["outside"].is_empty:
-        gpd.GeoSeries([r["outside"]],crs=crs).plot(ax=ax,color=AZUL,alpha=.95,linewidth=0)
+        gpd.GeoSeries([r["outside"]], crs=crs).plot(
+            ax=ax, color=AZUL, alpha=0.96, linewidth=0, zorder=1
+        )
+
     if not r["inside"].is_empty:
-        gpd.GeoSeries([r["inside"]],crs=crs).plot(ax=ax,color=VERDE,alpha=.95,linewidth=0)
+        gpd.GeoSeries([r["inside"]], crs=crs).plot(
+            ax=ax, color=VERDE, alpha=0.96, linewidth=0, zorder=2
+        )
+
     if not r["missing"].is_empty:
-        gpd.GeoSeries([r["missing"]],crs=crs).plot(ax=ax,color=AMARILLO,alpha=.98,linewidth=0)
+        gpd.GeoSeries([r["missing"]], crs=crs).plot(
+            ax=ax, color=AMARILLO, alpha=0.99, linewidth=0, zorder=3
+        )
 
-    ovgeom=overlap_vector(r)
+    ovgeom = overlap_vector(r)
     if ovgeom is not None:
-        gpd.GeoSeries([ovgeom],crs=crs).plot(ax=ax,color=ROJO,alpha=.98,linewidth=0)
+        gpd.GeoSeries([ovgeom], crs=crs).plot(
+            ax=ax, color=ROJO, alpha=0.99, linewidth=0, zorder=4
+        )
 
-    gpd.GeoSeries([r["field"]],crs=crs).plot(
-        ax=ax,facecolor="none",edgecolor="black",linewidth=1.25
+    if r["passes"]:
+        gpd.GeoSeries(r["passes"], crs=crs).plot(
+            ax=ax, color="black", linewidth=0.38, alpha=0.62, zorder=5
+        )
+
+    gpd.GeoSeries([r["field"]], crs=crs).plot(
+        ax=ax, facecolor="none", edgecolor="black", linewidth=1.45, zorder=6
     )
 
-    # Centerlines intentionally very subtle.
-    gpd.GeoSeries(r["passes"],crs=crs).plot(
-        ax=ax,color="black",linewidth=.14,alpha=.13
+    minx, miny, maxx, maxy = r["field"].bounds
+    dx = maxx - minx
+    dy = maxy - miny
+    pad_x = max(25, dx * 0.08)
+    pad_y = max(25, dy * 0.08)
+
+    ax.set_xlim(minx - pad_x, maxx + pad_x)
+    ax.set_ylim(miny - pad_y, maxy + pad_y)
+    ax.set_aspect("equal", adjustable="box")
+
+    fmt = FuncFormatter(lambda x, pos: f"{x:,.0f}")
+    ax.xaxis.set_major_formatter(fmt)
+    ax.yaxis.set_major_formatter(fmt)
+    ax.ticklabel_format(style="plain", axis="both", useOffset=False)
+
+    ax.set_xlabel("Coordenada Este (m)", fontsize=10)
+    ax.set_ylabel("Coordenada Norte (m)", fontsize=10)
+    ax.tick_params(labelsize=8.5)
+    ax.grid(True, linestyle="--", linewidth=0.45, alpha=0.25)
+
+    legend_handles = [
+        Patch(facecolor=VERDE, edgecolor="#398916", label="Aplicación correcta"),
+        Patch(facecolor=AMARILLO, edgecolor="#C9A900", label="Sin aplicar"),
+        Patch(facecolor=ROJO, edgecolor="#A91618", label="Traslape"),
+        Patch(facecolor=AZUL, edgecolor="#214F9C", label="Fuera de área"),
+        Patch(facecolor="white", edgecolor="black", label="Límite del campo"),
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="lower right",
+        bbox_to_anchor=(0.985, 0.13),
+        fontsize=8.4,
+        frameon=False,
+        borderaxespad=0.0,
+        handlelength=1.5,
+        handleheight=1.5,
+        labelspacing=0.75,
     )
 
-    bx=r["field"].bounds
-    pad=max(30,(bx[2]-bx[0])*.06)
-    ax.set_xlim(bx[0]-pad,bx[2]+pad)
-    ax.set_ylim(bx[1]-pad,bx[3]+pad)
-    ax.set_aspect("equal")
-    ax.set_title("Mapa de calidad de aplicación aérea - "+name,fontweight="bold",fontsize=14)
-    ax.set_xlabel("Coordenada Este (m)")
-    ax.set_ylabel("Coordenada Norte (m)")
-    ax.grid(True,linewidth=.22,alpha=.20)
+    ax.text(
+        0.94, 0.94, "N",
+        transform=ax.transAxes,
+        ha="center", va="bottom",
+        fontsize=14, fontweight="bold", zorder=20
+    )
+    ax.annotate(
+        "",
+        xy=(0.94, 0.91),
+        xytext=(0.94, 0.80),
+        xycoords="axes fraction",
+        arrowprops=dict(
+            facecolor="black",
+            edgecolor="black",
+            width=5,
+            headwidth=15,
+            headlength=20
+        ),
+        zorder=20
+    )
 
-    ax.legend(handles=[
-        Patch(facecolor=VERDE,label="Aplicación correcta"),
-        Patch(facecolor=AMARILLO,label="Sin aplicar"),
-        Patch(facecolor=ROJO,label="Traslapado"),
-        Patch(facecolor=AZUL,label="Fuera de área")
-    ],loc="best",fontsize=8.5,frameon=True)
+    x0, x1 = ax.get_xlim()
+    visible_width = x1 - x0
+    total_scale = _nice_scale_length(visible_width)
+    segments = 4
+    seg = total_scale / segments
 
-    out=io.BytesIO()
-    fig.tight_layout()
-    fig.savefig(out,format="png",dpi=240,bbox_inches="tight")
+    y0, y1 = ax.get_ylim()
+    visible_height = y1 - y0
+    bar_x0 = x0 + visible_width * 0.61
+    bar_y = y0 + visible_height * 0.045
+    bar_h = visible_height * 0.014
+
+    for i in range(segments):
+        rect = Rectangle(
+            (bar_x0 + i * seg, bar_y),
+            seg,
+            bar_h,
+            facecolor="black" if i % 2 == 0 else "white",
+            edgecolor="black",
+            linewidth=0.7,
+            zorder=20
+        )
+        ax.add_patch(rect)
+
+    for i in range(segments + 1):
+        value = int(round(i * seg))
+        ax.text(
+            bar_x0 + i * seg,
+            bar_y + bar_h * 1.65,
+            f"{value}",
+            ha="center", va="bottom",
+            fontsize=7.5, zorder=20
+        )
+
+    ax.text(
+        bar_x0 + total_scale + visible_width * 0.012,
+        bar_y + bar_h * 1.65,
+        "m",
+        ha="left", va="bottom",
+        fontsize=7.5, zorder=20
+    )
+
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+        spine.set_color("#444444")
+
+    out = io.BytesIO()
+    fig.subplots_adjust(left=0.12, right=0.985, bottom=0.12, top=0.985)
+    fig.savefig(out, format="png", dpi=260, facecolor="white")
     plt.close(fig)
     out.seek(0)
     return out
 
-def make_pdf(r,img,name,swath,source):
-    out=io.BytesIO()
-    doc=SimpleDocTemplate(out,pagesize=landscape(A4))
-    styles=getSampleStyleSheet()
 
-    rows=[
-        ["Resultado","Área (ha)","% del campo"],
-        ["Área real",f'{r["field_ha"]:.2f}',"100.00 %"],
-        ["Aplicación correcta",f'{r["single_ha"]:.2f}',f'{r["single_ha"]/r["field_ha"]*100:.2f} %'],
-        ["Sin aplicar",f'{r["missing_ha"]:.2f}',f'{r["missing_ha"]/r["field_ha"]*100:.2f} %'],
-        ["Traslapado",f'{r["overlap_ha"]:.2f}',f'{r["overlap_ha"]/r["field_ha"]*100:.2f} %'],
-        ["Fuera de área",f'{r["outside_ha"]:.2f}',f'{r["outside_ha"]/r["field_ha"]*100:.2f} %'],
-        ["Cobertura dentro",f'{r["inside_ha"]:.2f}',f'{r["inside_ha"]/r["field_ha"]*100:.2f} %']
-    ]
-    t=Table(rows,colWidths=[260,100,130])
-    t.setStyle(TableStyle([
-        ("GRID",(0,0),(-1,-1),.5,colors.grey),
-        ("BACKGROUND",(0,0),(-1,0),colors.lightblue),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold")
-    ]))
+def _draw_centered_text(c, text, x, y, w, font="Helvetica-Bold",
+                        size=10, color=colors.black):
+    c.setFillColor(color)
+    c.setFont(font, size)
+    c.drawCentredString(x + w / 2, y, text)
 
-    story=[
-        Paragraph("INFORME DE APLICACIÓN AÉREA - "+name.upper(),styles["Title"]),
-        Spacer(1,8),t,Spacer(1,8),
-        Paragraph(
-            f"Área geométrica real. Ancho de faja: {swath:.1f} m. "
-            f"Fuente GPS: {source}. El traslape se representa como franjas continuas.",
-            styles["BodyText"]
-        ),
-        Spacer(1,8),
-        Image(img,width=600,height=330)
+
+def _draw_result_table(c, r, x, y_top, w):
+    header_h = 25
+    row_h = 34
+    col1 = w * 0.57
+    col2 = w * 0.22
+    col3 = w - col1 - col2
+
+    data = [
+        ("Área real del campo", r["field_ha"], 100.00, None),
+        ("Aplicación correcta", r["single_ha"], r["single_ha"] / r["field_ha"] * 100, VERDE),
+        ("Sin aplicar", r["missing_ha"], r["missing_ha"] / r["field_ha"] * 100, AMARILLO),
+        ("Traslape", r["overlap_ha"], r["overlap_ha"] / r["field_ha"] * 100, ROJO),
+        ("Fuera de área", r["outside_ha"], r["outside_ha"] / r["field_ha"] * 100, AZUL),
+        ("Área total cubierta", r["inside_ha"], r["inside_ha"] / r["field_ha"] * 100, "TOTAL"),
     ]
-    doc.build(story)
+
+    y = y_top - header_h
+    c.setFillColor(colors.HexColor("#DCE8D4"))
+    c.rect(x, y, w, header_h, fill=1, stroke=0)
+
+    c.setStrokeColor(colors.HexColor("#A0A0A0"))
+    c.setLineWidth(0.45)
+    for vx in (x, x + col1, x + col1 + col2, x + w):
+        c.line(vx, y, vx, y + header_h)
+    c.line(x, y, x + w, y)
+    c.line(x, y + header_h, x + w, y + header_h)
+
+    _draw_centered_text(c, "Resultado", x, y + 8, col1, size=8)
+    _draw_centered_text(c, "ha", x + col1, y + 8, col2, size=8)
+    _draw_centered_text(c, "%", x + col1 + col2, y + 8, col3, size=8)
+
+    for label, ha, pct, swatch in data:
+        y -= row_h
+
+        if swatch == "TOTAL":
+            c.setFillColor(colors.HexColor("#E5F0D9"))
+            c.rect(x, y, w, row_h, fill=1, stroke=0)
+
+        c.setStrokeColor(colors.HexColor("#A0A0A0"))
+        c.setLineWidth(0.45)
+        c.rect(x, y, w, row_h, fill=0, stroke=1)
+        c.line(x + col1, y, x + col1, y + row_h)
+        c.line(x + col1 + col2, y, x + col1 + col2, y + row_h)
+
+        text_x = x + 8
+        if swatch not in (None, "TOTAL"):
+            c.setFillColor(colors.HexColor(swatch))
+            c.rect(x + 7, y + 10, 12, 14, fill=1, stroke=0)
+            text_x = x + 25
+
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold" if swatch == "TOTAL" else "Helvetica", 7.8)
+        c.drawString(text_x, y + 12, label)
+        c.drawCentredString(x + col1 + col2 / 2, y + 12, f"{ha:.2f}")
+        c.drawCentredString(x + col1 + col2 + col3 / 2, y + 12, f"{pct:.2f}")
+
+    return y
+
+
+def _draw_info_box(c, x, y_top, w, swath, source, resolution):
+    row_h = 24
+    rows = [
+        ("Ancho de faja:", f"{swath:.1f} m"),
+        ("Fuente GPS:", source),
+        ("Resolución de cálculo:", f"{resolution:.2f} m"),
+    ]
+    y = y_top - row_h * len(rows)
+
+    c.setStrokeColor(colors.HexColor("#A0A0A0"))
+    c.setLineWidth(0.55)
+    c.rect(x, y, w, row_h * len(rows), fill=0, stroke=1)
+
+    split = x + w * 0.55
+    c.line(split, y, split, y + row_h * len(rows))
+
+    for i, (lab, val) in enumerate(rows):
+        row_y = y + row_h * (len(rows) - 1 - i)
+        if i > 0:
+            c.line(x, row_y + row_h, x + w, row_y + row_h)
+
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 7.4)
+        c.drawString(x + 8, row_y + 8.5, lab)
+
+        c.setFont("Helvetica", 7.0)
+        c.drawString(split + 7, row_y + 8.5, val)
+
+    return y
+
+
+def make_pdf(r, img, name, swath, source):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
+
+    out = io.BytesIO()
+    page_w, page_h = landscape(A4)
+    c = canvas.Canvas(out, pagesize=(page_w, page_h))
+
+    dark_green = colors.HexColor("#285C1F")
+    light_border = colors.HexColor("#9A9A9A")
+
+    c.setStrokeColor(colors.HexColor("#555555"))
+    c.setLineWidth(0.6)
+    c.rect(9, 9, page_w - 18, page_h - 18, fill=0, stroke=1)
+
+    c.setFillColor(dark_green)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawCentredString(page_w / 2, page_h - 37, "INFORME DE APLICACIÓN AÉREA")
+
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 15)
+    c.drawCentredString(page_w / 2, page_h - 65, name.upper())
+
+    c.setFont("Helvetica", 9.5)
+    c.drawCentredString(
+        page_w / 2,
+        page_h - 84,
+        "Comparación del plano real del campo vs. registro GPS AgNav"
+    )
+
+    header_line_y = page_h - 96
+    c.setStrokeColor(dark_green)
+    c.setLineWidth(1.2)
+    c.line(10, header_line_y, page_w - 10, header_line_y)
+
+    left_x, left_w = 18, 215
+    map_x, map_w = 242, 430
+    logo_x, logo_w = 681, page_w - 699
+    panel_top = header_line_y - 13
+    section_h = 26
+    panel_bottom = 80
+
+    c.setFillColor(dark_green)
+    c.rect(left_x, panel_top - section_h, left_w, section_h, fill=1, stroke=0)
+    _draw_centered_text(
+        c, "RESULTADOS", left_x, panel_top - section_h + 8,
+        left_w, size=10.5, color=colors.white
+    )
+
+    table_y = _draw_result_table(
+        c, r, left_x, panel_top - section_h - 5, left_w
+    )
+    _draw_info_box(
+        c, left_x, table_y - 10, left_w, swath, source, r["res"]
+    )
+
+    c.setFillColor(dark_green)
+    c.rect(map_x, panel_top - section_h, map_w, section_h, fill=1, stroke=0)
+    _draw_centered_text(
+        c, "MAPA DE CALIDAD DE APLICACIÓN AÉREA",
+        map_x, panel_top - section_h + 8, map_w,
+        size=10.1, color=colors.white
+    )
+
+    map_box_y = panel_bottom + 4
+    map_box_h = panel_top - section_h - map_box_y - 5
+    c.setStrokeColor(light_border)
+    c.setLineWidth(0.55)
+    c.rect(map_x, map_box_y, map_w, map_box_h, fill=0, stroke=1)
+
+    c.drawImage(
+        ImageReader(img),
+        map_x + 4,
+        map_box_y + 4,
+        width=map_w - 8,
+        height=map_box_h - 8,
+        preserveAspectRatio=True,
+        anchor="c",
+        mask="auto"
+    )
+
+    logo_panel_y = panel_bottom + 4
+    logo_panel_h = panel_top - logo_panel_y
+    c.setStrokeColor(light_border)
+    c.setLineWidth(0.55)
+    c.rect(logo_x, logo_panel_y, logo_w, logo_panel_h, fill=0, stroke=1)
+
+    logo_path = Path("montelimar_logo.png")
+    if logo_path.exists():
+        try:
+            logo = ImageReader(str(logo_path))
+            iw, ih = logo.getSize()
+            max_w = logo_w - 18
+            max_h = 150
+            scale = min(max_w / iw, max_h / ih)
+            dw, dh = iw * scale, ih * scale
+            c.drawImage(
+                logo,
+                logo_x + (logo_w - dw) / 2,
+                logo_panel_y + logo_panel_h * 0.48,
+                width=dw,
+                height=dh,
+                mask="auto"
+            )
+        except Exception:
+            pass
+
+    c.setFillColor(dark_green)
+    c.setFont("Helvetica-Bold", 13)
+    c.drawCentredString(
+        logo_x + logo_w / 2,
+        logo_panel_y + logo_panel_h * 0.40,
+        "MONTELIMAR"
+    )
+
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawCentredString(
+        logo_x + logo_w / 2,
+        logo_panel_y + logo_panel_h * 0.34,
+        "INGENIO MONTELIMAR"
+    )
+
+    c.setStrokeColor(light_border)
+    c.setLineWidth(0.55)
+    c.line(10, 68, page_w - 10, 68)
+
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(28, 48, "Nota:")
+
+    c.setFont("Helvetica", 7.5)
+    c.drawString(
+        52, 48,
+        "El área del campo se calcula directamente a partir de la geometría real del shapefile. "
+        "La aplicación correcta corresponde a la superficie con una sola cobertura."
+    )
+    c.drawString(
+        52, 34,
+        "El traslape representa áreas con dos o más coberturas y está incluido dentro del área total cubierta."
+    )
+
+    c.showPage()
+    c.save()
     out.seek(0)
     return out
+
 
 st.title("🚁 Calidad de Aplicación Aérea AgNav")
 st.write(
@@ -312,7 +640,7 @@ if st.button("PROCESAR APLICACIÓN",type="primary",disabled=not(fzip and azip),u
         st.success("Listo.")
         a,b,c,d=st.columns(4)
         a.metric("Área real",f'{r["field_ha"]:.2f} ha')
-        b.metric("Cobertura",f'{r["inside_ha"]:.2f} ha',f'{r["inside_ha"]/r["field_ha"]*100:.2f}%')
+        b.metric("Área total cubierta",f'{r["inside_ha"]:.2f} ha',f'{r["inside_ha"]/r["field_ha"]*100:.2f}%')
         c.metric("Sin aplicar",f'{r["missing_ha"]:.2f} ha')
         d.metric("Traslape",f'{r["overlap_ha"]:.2f} ha')
 
