@@ -245,10 +245,14 @@ def make_map(r, crs, name):
     minx, miny, maxx, maxy = r["field"].bounds
     dx = maxx - minx
     dy = maxy - miny
-    pad_x = max(25, dx * 0.08)
+
+    # Dejamos un margen mayor a la derecha exclusivamente para la leyenda.
+    # Así la leyenda sigue DENTRO del mapa, pero no se monta sobre el campo.
+    pad_left = max(25, dx * 0.07)
+    pad_right = max(90, dx * 0.32)
     pad_y = max(25, dy * 0.08)
 
-    ax.set_xlim(minx - pad_x, maxx + pad_x)
+    ax.set_xlim(minx - pad_left, maxx + pad_right)
     ax.set_ylim(miny - pad_y, maxy + pad_y)
     ax.set_aspect("equal", adjustable="box")
 
@@ -270,8 +274,9 @@ def make_map(r, crs, name):
     ]
     ax.legend(
         handles=legend_handles,
-        loc="lower right",
-        bbox_to_anchor=(0.985, 0.13),
+        # Ubicada en el margen derecho reservado, fuera del polígono del campo.
+        loc="center right",
+        bbox_to_anchor=(0.985, 0.49),
         fontsize=8.4,
         frameon=False,
         borderaxespad=0.0,
