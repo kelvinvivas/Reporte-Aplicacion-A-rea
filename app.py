@@ -255,7 +255,6 @@ def make_map(r, crs, name):
     fmt = FuncFormatter(lambda x, pos: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
     ax.yaxis.set_major_formatter(fmt)
-    ax.ticklabel_format(style="plain", axis="both", useOffset=False)
 
     ax.set_xlabel("Coordenada Este (m)", fontsize=10)
     ax.set_ylabel("Coordenada Norte (m)", fontsize=10)
