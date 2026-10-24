@@ -1,10 +1,13 @@
-# AgNav Streamlit
+# Reporte Automatizado de Aplicación
 
-1. Sube `app.py` y `requirements.txt` a un repositorio de GitHub.
-2. En Streamlit Community Cloud crea una app nueva.
-3. Selecciona tu repositorio y usa `app.py` como entrypoint.
-4. Despliega.
+App de Streamlit que cruza el polígono de aplicación con los datos reales del GPS
+(bitácora AgNav, Shapefile, GPX, GeoJSON o CSV) y genera un PDF de una página con
+hectáreas teóricas/aplicadas, traslape, fuera del polígono, zonas omitidas, eficiencia y mapa.
 
-Local:
-pip install -r requirements.txt
-streamlit run app.py
+## Despliegue en Streamlit Community Cloud
+1. Suba `app.py`, `requirements.txt` y este `README.md` a un repositorio de GitHub.
+2. En https://share.streamlit.io elija el repositorio y `app.py` como archivo principal.
+3. En *Advanced settings* seleccione Python 3.11 o 3.12.
+
+No se agrega `gdal` a `requirements.txt`: `fiona` y `pyogrio` ya incluyen GDAL en sus wheels
+para Linux. Instalar `gdal` por pip exigiría `libgdal-dev` en `packages.txt` y suele fallar.
