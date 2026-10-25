@@ -568,7 +568,7 @@ def build_pdf(res, meta, logo_bytes=None):
     W, H = pagesize
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=pagesize)
-    c.setTitle("Reporte Automatizado de Aplicación")
+    c.setTitle("Reporte de Aplicación Madurante")
     M = 12 * mm
     dark, green = colors.HexColor("#1b5e20"), colors.HexColor("#2e7d32")
 
@@ -591,7 +591,7 @@ def build_pdf(res, meta, logo_bytes=None):
         c.drawCentredString(M + 2 * mm + lw_ / 2, top - 10 * mm, "LOGO")
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(M + lw_ + 8 * mm, top - 8 * mm, "Reporte Automatizado de Aplicación")
+    c.drawString(M + lw_ + 8 * mm, top - 8 * mm, "Reporte de Aplicación Madurante")
     c.setFont("Helvetica", 8.5)
     sub = " | ".join(x for x in (meta.get("lote"), meta.get("cliente")) if x) or "Lote sin nombre"
     c.drawString(M + lw_ + 8 * mm, top - 14 * mm, sub)
