@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Reporte Automatizado de Aplicación (agrícola / aérea)
+Reporte Automatizado de Aplicación (agrícola / forestal / aérea)
 ================================================================
 App de Streamlit que:
   1. Recibe un ZIP con el polígono de aplicación (Shapefile, GeoJSON, KML, GPKG).
@@ -13,7 +13,6 @@ App de Streamlit que:
 
 Todo se procesa en memoria: los ZIP nunca se guardan de forma permanente.
 """
-import datetime
 import io
 import os
 import re
@@ -568,7 +567,7 @@ def build_pdf(res, meta, logo_bytes=None):
     W, H = pagesize
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=pagesize)
-    c.setTitle("Reporte de Aplicación Madurante")
+    c.setTitle("Reporte Automatizado de Aplicación")
     M = 12 * mm
     dark, green = colors.HexColor("#1b5e20"), colors.HexColor("#2e7d32")
 
@@ -591,14 +590,13 @@ def build_pdf(res, meta, logo_bytes=None):
         c.drawCentredString(M + 2 * mm + lw_ / 2, top - 10 * mm, "LOGO")
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(M + lw_ + 8 * mm, top - 8 * mm, "Reporte de Aplicación Madurante")
+    c.drawString(M + lw_ + 8 * mm, top - 8 * mm, "Reporte Automatizado de Aplicación")
     c.setFont("Helvetica", 8.5)
     sub = " | ".join(x for x in (meta.get("lote"), meta.get("cliente")) if x) or "Lote sin nombre"
     c.drawString(M + lw_ + 8 * mm, top - 14 * mm, sub)
     c.setFont("Helvetica", 9)
-    c.drawRightString(W - M - 3 * mm, top - 8 * mm, "Fecha: " + datetime.date.today().strftime("%d/%m/%Y"))
     if meta.get("fecha_app"):
-        c.drawRightString(W - M - 3 * mm, top - 14 * mm, "Aplicación: " + meta["fecha_app"])
+        c.drawRightString(W - M - 3 * mm, top - 11 * mm, "Aplicación: " + meta["fecha_app"])
 
     # --- KPI principales (3 tarjetas) ---
     y = top - 18 * mm - 4 * mm
@@ -645,26 +643,21 @@ def build_pdf(res, meta, logo_bytes=None):
     t.drawOn(c, M, y - th)
     y -= th + 3 * mm
 
-    # --- pie: observaciones y firmas ---
-    foot_h = 34 * mm
+    # --- pie: solo observaciones ---
+    foot_h = 27 * mm
     foot_top = M + foot_h
+    box_bottom, box_top = M + 2 * mm, foot_top - 5 * mm
     c.setStrokeColor(colors.HexColor("#b0bec5"))
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 8.5)
     c.drawString(M, foot_top - 3 * mm, "Observaciones")
-    c.rect(M, M + 11 * mm, W - 2 * M, foot_h - 17 * mm, fill=0, stroke=1)
+    c.rect(M, box_bottom, W - 2 * M, box_top - box_bottom, fill=0, stroke=1)
     c.setFont("Helvetica", 8)
     note = (meta.get("notas") or "").strip()
-    ty = foot_top - 10.5 * mm
-    for ln in simpleSplit(note, "Helvetica", 8, W - 2 * M - 4 * mm)[:3]:
+    ty = box_top - 4.5 * mm
+    for ln in simpleSplit(note, "Helvetica", 8, W - 2 * M - 4 * mm)[:5]:
         c.drawString(M + 2 * mm, ty, ln)
         ty -= 3.6 * mm
-    sig_w = (W - 2 * M - 2 * gap) / 3
-    for i, lab in enumerate(("Elaborado por", "Revisado por", "Recibido por (cliente)")):
-        x = M + i * (sig_w + gap)
-        c.line(x + 4 * mm, M + 6 * mm, x + sig_w - 4 * mm, M + 6 * mm)
-        c.setFont("Helvetica", 7.5)
-        c.drawCentredString(x + sig_w / 2, M + 2.5 * mm, lab + (": " + meta["elaborado"] if i == 0 and meta.get("elaborado") else ""))
 
     # --- mapa: ocupa todo el espacio libre, centrado y sin deformarse ---
     map_top, map_bottom = y, foot_top + 2 * mm
@@ -685,6 +678,22 @@ def build_pdf(res, meta, logo_bytes=None):
 # --------------------------------------------------------------------------
 def main():
     st.set_page_config(page_title="Reporte de Aplicación", page_icon="🗺️", layout="wide")
+    # Evita que la traducción automática del navegador rompa la interfaz
+    # (error "removeChild ... no es hijo de este nodo").
+    import streamlit.components.v1 as components
+    components.html(
+        """<script>
+        const d = window.parent.document;
+        d.documentElement.setAttribute('translate', 'no');
+        d.documentElement.classList.add('notranslate');
+        if (!d.querySelector('meta[name=google]')) {
+            const m = d.createElement('meta');
+            m.name = 'google'; m.content = 'notranslate';
+            d.head.appendChild(m);
+        }
+        </script>""",
+        height=0,
+    )
     st.title("🗺️ Reporte Automatizado de Aplicación")
     st.caption("Cargue el polígono y los datos del GPS; la app calcula la cobertura y genera un PDF de una página.")
 
@@ -699,7 +708,6 @@ def main():
         lote = st.text_input("Lote / Finca")
         cliente = st.text_input("Cliente / Empresa")
         fecha_app = st.text_input("Fecha de aplicación")
-        elaborado = st.text_input("Elaborado por")
         notas = st.text_area("Observaciones", height=90)
         logo = st.file_uploader("Logo (opcional)", type=["png", "jpg", "jpeg"])
 
@@ -713,8 +721,7 @@ def main():
         try:
             with st.spinner("Procesando datos..."):
                 res = process(poly_up, gps_up, params)
-                res["meta"] = dict(lote=lote, cliente=cliente, fecha_app=fecha_app,
-                                   elaborado=elaborado, notas=notas)
+                res["meta"] = dict(lote=lote, cliente=cliente, fecha_app=fecha_app, notas=notas)
                 res["pdf"] = build_pdf(res, res["meta"], logo.getvalue() if logo else None)
             st.session_state["res"] = res
         except DataError as exc:
