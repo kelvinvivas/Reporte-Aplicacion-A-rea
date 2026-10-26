@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Reporte Automatizado de Aplicación (agrícola / forestal / aérea)
+Reporte Aplicación Madurante 2627 (agrícola / aérea)
 ================================================================
 App de Streamlit que:
   1. Recibe un ZIP con el polígono de aplicación (Shapefile, GeoJSON, KML, GPKG).
