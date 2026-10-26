@@ -694,7 +694,7 @@ def main():
         </script>""",
         height=0,
     )
-    st.title("🗺️ Reporte Automatizado de Aplicación")
+    st.title("🗺️ Reporte Aplicación Madurante 2627")
     st.caption("Cargue el polígono y los datos del GPS; la app calcula la cobertura y genera un PDF de una página.")
 
     with st.sidebar:
