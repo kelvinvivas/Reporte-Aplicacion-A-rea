@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Reporte Aplicación Madurante 2627 (agrícola / aérea)
+Reporte Automatizado de Aplicación (agrícola / forestal / aérea)
 ================================================================
 App de Streamlit que:
   1. Recibe un ZIP con el polígono de aplicación (Shapefile, GeoJSON, KML, GPKG).
@@ -232,9 +232,17 @@ def _split_sharp(p, deg=SHARP_TURN_DEG):
     return [p[a:b + 1] for a, b in zip(cuts[:-1], cuts[1:]) if b > a]
 
 
-def runs_and_turns(tracks, key):
-    """Pasadas de aspersión (spray activo) y giros (tramos sin aspersión entre pasadas)."""
-    runs, turns = [], []
+def runs_and_turns(tracks, key, bridge=2, extend=0.0):
+    """
+    Pasadas de aspersión (spray activo) y giros (tramos sin aspersión entre pasadas).
+
+    bridge : une dos tramos con aspersión separados por hasta N registros "apagados"
+             cuando la trayectoria sigue recta (interrupción corta dentro de la misma línea).
+    extend : fracción del intervalo entre registros que se alarga cada extremo de pasada
+             (0 = exactamente entre el primer y el último registro con aspersión).
+    Devuelve (pasadas, giros, cantidad_de_interrupciones_unidas).
+    """
+    runs, turns, n_bridged = [], [], 0
     for t in tracks:
         xy, sp = t[key], t["spray"]
         n, i, frames = len(xy), 0, []
@@ -244,17 +252,43 @@ def runs_and_turns(tracks, key):
                 while j + 1 < n and sp[j + 1] and np.hypot(*(xy[j + 1] - xy[j])) < GAP_BREAK_M:
                     j += 1
                 if j > i:
-                    frames.append((i, j))
+                    frames.append([i, j])
                 i = j + 1
             else:
                 i += 1
+        # --- unir interrupciones cortas sobre la misma línea recta ---
+        if bridge > 0 and frames:
+            merged = [frames[0]]
+            for a, b in frames[1:]:
+                pa, pb = merged[-1]
+                gap_records = a - pb - 1
+                gap_len = np.hypot(*np.diff(xy[pb:a + 1], axis=0).T).sum()
+                if gap_records <= bridge and gap_len < 45.0 and pb > merged[-1][0] and b > a:
+                    h0 = np.arctan2(*(xy[pb] - xy[pb - 1])[::-1])
+                    h1 = np.arctan2(*(xy[a + 1] - xy[a])[::-1])
+                    dh = abs((h1 - h0 + np.pi) % (2 * np.pi) - np.pi)
+                    gs = np.diff(xy[pb:a + 1], axis=0)
+                    hg = np.arctan2(gs[:, 1], gs[:, 0])
+                    dg = np.abs((hg - h0 + np.pi) % (2 * np.pi) - np.pi)
+                    if np.degrees(dh) < 20.0 and np.degrees(dg.max()) < 25.0:
+                        merged[-1][1] = b
+                        n_bridged += 1
+                        continue
+                merged.append([a, b])
+            frames = merged
         for a, b in frames:
-            runs.extend(_split_sharp(xy[a:b + 1]))
+            p = xy[a:b + 1]
+            if extend > 0:
+                if a > 0 and np.hypot(*(xy[a] - xy[a - 1])) < GAP_BREAK_M:
+                    p = np.vstack([xy[a] + (xy[a - 1] - xy[a]) * extend, p])
+                if b < n - 1 and np.hypot(*(xy[b + 1] - xy[b])) < GAP_BREAK_M:
+                    p = np.vstack([p, xy[b] + (xy[b + 1] - xy[b]) * extend])
+            runs.extend(_split_sharp(p))
         for (a0, b0), (a1, b1) in zip(frames[:-1], frames[1:]):
             seg = xy[b0:a1 + 1]
             if len(seg) > 1 and np.hypot(*np.diff(seg, axis=0).T).sum() < MAX_TURN_LENGTH_M:
                 turns.append(seg)
-    return runs, turns
+    return runs, turns, n_bridged
 
 
 def tracks_from_generic(gdf_or_xy, crs, label):
@@ -343,6 +377,15 @@ def overlap_geometry(geoms):
 # --------------------------------------------------------------------------
 # 5. Procesamiento principal
 # --------------------------------------------------------------------------
+def safe_union(geoms):
+    """unary_union que reintenta con buffer(0) si GEOS reporta un error topológico."""
+    geoms = [g for g in geoms if g is not None and not g.is_empty]
+    try:
+        return unary_union(geoms)
+    except Exception:
+        return unary_union([make_valid(g).buffer(0) for g in geoms])
+
+
 def to_metric_crs(gdf, fallback_epsg):
     if gdf.crs is None:
         gdf = gdf.set_crs(epsg=fallback_epsg)
@@ -362,16 +405,13 @@ def pick_agnav_coords(tracks, poly_u, crs, mode):
         return "xy_proj", "XY del proyecto AgNav"
     if mode == "Lat/Lon convertido":
         return "xy_ll", "Lat/Lon convertido"
+    from shapely import contains_xy
     zone = poly_u.buffer(150)
     score = {}
     for key in ("xy_proj", "xy_ll"):
-        hits = tot = 0
-        for t in tracks:
-            pts = t[key][t["spray"]]
-            pts = pts[:: max(1, len(pts) // 300)]
-            tot += len(pts)
-            hits += sum(zone.contains(Point(x, y)) for x, y in pts)
-        score[key] = hits / tot if tot else 0
+        pts = np.vstack([t[key][t["spray"]] for t in tracks if t["spray"].any()] or [np.zeros((0, 2))])
+        pts = pts[:: max(1, len(pts) // 3000)]
+        score[key] = float(contains_xy(zone, pts[:, 0], pts[:, 1]).mean()) if len(pts) else 0.0
     key = max(score, key=score.get)
     if score[key] < 0.2:
         raise DataError("Los datos del GPS no caen sobre el polígono. Revise que ambos ZIP "
@@ -394,16 +434,16 @@ def process(poly_up, gps_up, params):
     gdf = to_metric_crs(gdf, params["epsg"])
     crs = gdf.crs
     gdf["geometry"] = gdf.geometry.apply(lambda g: g if g.is_valid else make_valid(g))
-    poly_u = polygonal(unary_union(list(gdf.geometry)))
+    poly_u = polygonal(safe_union(list(gdf.geometry)))
     area_poly = poly_u.area / 1e4
 
     # ---- GPS ----
-    source, coord_label = "", ""
+    source, coord_label, n_bridged = "", "", 0
     tracks = parse_agnav(gfiles)
     direct = []
     if tracks:
         key, coord_label = pick_agnav_coords(tracks, poly_u, crs, params["coord_mode"])
-        runs, turns = runs_and_turns(tracks, key)
+        runs, turns, n_bridged = runs_and_turns(tracks, key, params["bridge"], params["extend"])
         source = f"Bitácora AgNav ({len(tracks)} archivos)"
     else:
         try:
@@ -422,14 +462,18 @@ def process(poly_up, gps_up, params):
     # ---- fajas ----
     geoms = [g for g in (swath_geometry(r, width) for r in runs) if g is not None and not g.is_empty]
     geoms += [g for g in direct if not g.is_empty]
-    applied = polygonal(unary_union(geoms))
+    applied = polygonal(safe_union(geoms))
     overlap = overlap_geometry(geoms) if len(geoms) > 1 else Polygon()
-    inside = applied.intersection(poly_u)
-    ov_in = overlap.intersection(poly_u)
-    green = polygonal(inside.difference(ov_in))
-    yellow = polygonal(ov_in)
-    red = polygonal(applied.difference(poly_u))
-    gaps = polygonal(poly_u.difference(applied))
+    try:
+        inside = applied.intersection(poly_u)
+        ov_in = overlap.intersection(poly_u)
+        green = polygonal(inside.difference(ov_in))
+        yellow = polygonal(ov_in)
+        red = polygonal(applied.difference(poly_u))
+        gaps = polygonal(poly_u.difference(applied))
+    except Exception as exc:
+        raise DataError("Error geométrico al cruzar el polígono con las fajas "
+                        f"({type(exc).__name__}: {exc}). Revise que el polígono no tenga geometrías inválidas.")
 
     ha = lambda g: g.area / 1e4
     a_in, a_ov, a_out, a_gap = ha(inside), ha(yellow), ha(red), ha(gaps)
@@ -442,7 +486,7 @@ def process(poly_up, gps_up, params):
         eficiencia=ha(green) / a_total * 100 if a_total else 0,
         margen_error=(a_total - area_poly) / area_poly * 100 if area_poly else 0,
         gross_ha=gross_ha, agnav_ha=(agnav_m2 / 1e4 if agnav_m2 else None),
-        n_runs=len(runs), n_turns=len(turns), width=width, source=source,
+        n_runs=len(runs), n_turns=len(turns), n_bridged=n_bridged, width=width, source=source,
         coords=coord_label, crs=crs.to_string() if crs else "",
     )
 
@@ -453,8 +497,11 @@ def process(poly_up, gps_up, params):
     for idx, (_, row) in enumerate(gdf.iterrows()):
         g = row.geometry
         pa = g.area / 1e4
-        ap = g.intersection(applied).area / 1e4
-        ovp = g.intersection(ov_tree_geom).area / 1e4
+        try:
+            ap = g.intersection(applied).area / 1e4
+            ovp = g.intersection(ov_tree_geom).area / 1e4
+        except Exception:
+            ap = ovp = 0.0
         rows.append({
             "Polígono": (str(row[label_col]) if label_col and label_col in gdf.columns else str(idx + 1)),
             "Área (ha)": round(pa, 3), "Aplicada (ha)": round(ap, 3),
@@ -484,7 +531,7 @@ def _plot_geom(ax, geom, **kw):
 
 
 def make_map(gdf, poly_u, green, yellow, red, gaps, runs, turns, label_col):
-    minx, miny, maxx, maxy = unary_union([poly_u, green, yellow, red]).bounds
+    minx, miny, maxx, maxy = safe_union([poly_u, green, yellow, red]).bounds
     w, h = maxx - minx, maxy - miny
     mx, my = w * 0.04, h * 0.04
     minx, maxx, miny, maxy = minx - mx, maxx + mx, miny - my, maxy + my
@@ -499,7 +546,7 @@ def make_map(gdf, poly_u, green, yellow, red, gaps, runs, turns, label_col):
     _plot_geom(ax, red, color=COLOR_RED, linewidth=0, zorder=3)
     gdf.plot(ax=ax, facecolor="none", edgecolor="black", linewidth=0.8, zorder=5)
     if runs:
-        ax.add_collection(LineCollection(runs, colors="#0b3d0b", linewidths=0.25, alpha=0.6, zorder=4))
+        ax.add_collection(LineCollection(runs, colors="#0b3d0b", linewidths=0.45, alpha=0.95, capstyle="round", zorder=4))
     if turns:
         ax.add_collection(LineCollection(turns, colors=COLOR_TURN, linewidths=0.7, zorder=6))
     if label_col and label_col in gdf.columns and len(gdf) <= 150:
@@ -641,7 +688,20 @@ def build_pdf(res, meta, logo_bytes=None):
     ]))
     tw, th = t.wrapOn(c, W - 2 * M, 100 * mm)
     t.drawOn(c, M, y - th)
-    y -= th + 3 * mm
+    y -= th + 2.5 * mm
+    c.setFillColor(colors.HexColor("#555555"))
+    notes = [
+        "Cobertura = área aplicada dentro del polígono / área del polígono. Indica qué parte del lote se logró tratar.",
+        "Eficiencia = área aplicada con una sola pasada / área aplicada total. Baja si hay traslape o aplicación fuera del polígono.",
+    ]
+    for i, ln in enumerate(notes):
+        c.setFont("Helvetica-Bold", 6.8)
+        word = ln.split(" = ")[0]
+        c.drawString(M, y - 2.6 * mm, word)
+        c.setFont("Helvetica", 6.8)
+        c.drawString(M + c.stringWidth(word, "Helvetica-Bold", 6.8) + 1.5 * mm, y - 2.6 * mm, "= " + ln.split(" = ", 1)[1])
+        y -= 3.2 * mm
+    y -= 1.5 * mm
 
     # --- pie: solo observaciones ---
     foot_h = 27 * mm
@@ -667,10 +727,20 @@ def build_pdf(res, meta, logo_bytes=None):
     c.drawImage(img, M + (bw - dw) / 2, map_bottom + (bh - dh) / 2, dw, dh)
     c.setFont("Helvetica-Oblique", 6.5)
     c.setFillColor(colors.HexColor("#666666"))
-    c.drawRightString(W - M, M - 3 * mm + 1, f"Fuente: {m['source']} | Coordenadas: {m['coords']} | CRS: {m['crs']}")
+    c.drawRightString(W - M, M - 3 * mm + 1, f"Fuente: {m['source']} | Coordenadas: {m['coords']} | CRS: {m['crs']} | Interrupciones unidas: {m.get('n_bridged', 0)}")
     c.showPage()          # una sola página
     c.save()
     return buf.getvalue()
+
+
+def pdf_to_png(pdf_bytes, dpi=200):
+    """Convierte la página del PDF en PNG (el informe completo como imagen)."""
+    import fitz  # PyMuPDF
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return doc[0].get_pixmap(dpi=dpi).tobytes("png")
+    finally:
+        doc.close()
 
 
 # --------------------------------------------------------------------------
@@ -694,13 +764,15 @@ def main():
         </script>""",
         height=0,
     )
-    st.title("🗺️ Reporte Aplicación Madurante 2627")
+    st.title("🗺️ Reporte Automatizado de Aplicación")
     st.caption("Cargue el polígono y los datos del GPS; la app calcula la cobertura y genera un PDF de una página.")
 
     with st.sidebar:
         st.header("Parámetros")
         auto_meta = st.checkbox("Leer ancho de faja y área AgNav del log (si existe)", value=True)
         swath = st.number_input("Ancho de faja (m)", 1.0, 200.0, 15.0, 0.5)
+        bridge = st.number_input("Unir interrupciones cortas de aspersión (máx. registros; 0 = no unir)", 0, 5, 2, 1)
+        extend = st.slider("Alargar extremos de cada pasada (fracción del intervalo entre registros)", 0.0, 0.5, 0.0, 0.05)
         coord_mode = st.selectbox("Coordenadas AgNav", ["Automático", "XY de AgNav", "Lat/Lon convertido"])
         epsg = st.number_input("EPSG si el polígono no trae .prj", 1000, 99999, 32616, 1)
         label_col = st.text_input("Columna para etiquetar polígonos (opcional)", "")
@@ -716,21 +788,24 @@ def main():
     gps_up = c2.file_uploader("2) ZIP con los datos reales del GPS", type=["zip"], key="gps")
 
     if st.button("Generar reporte", type="primary", disabled=not (poly_up and gps_up)):
-        params = dict(auto_meta=auto_meta, swath=swath, coord_mode=coord_mode, epsg=int(epsg),
+        params = dict(auto_meta=auto_meta, swath=swath, bridge=int(bridge), extend=float(extend), coord_mode=coord_mode, epsg=int(epsg),
                       label_col=label_col.strip() or None)
         try:
             with st.spinner("Procesando datos..."):
                 res = process(poly_up, gps_up, params)
                 res["meta"] = dict(lote=lote, cliente=cliente, fecha_app=fecha_app, notas=notas)
                 res["pdf"] = build_pdf(res, res["meta"], logo.getvalue() if logo else None)
+                try:
+                    res["report_png"] = pdf_to_png(res["pdf"])
+                except Exception:
+                    res["report_png"] = None   # sin PyMuPDF: se ofrece solo el mapa
             st.session_state["res"] = res
         except DataError as exc:
             st.session_state.pop("res", None)
             st.error(f"⚠️ {exc}")
         except Exception as exc:  # error no previsto
             st.session_state.pop("res", None)
-            st.error("Ocurrió un error inesperado al procesar los archivos. "
-                     "Verifique que los datos sean válidos.")
+            st.error(f"Ocurrió un error inesperado: {type(exc).__name__}: {exc}")
             with st.expander("Detalle técnico"):
                 st.code(traceback.format_exc())
 
@@ -740,20 +815,34 @@ def main():
         return
     m = res["metrics"]
     k = st.columns(5)
-    k[0].metric("Hectáreas teóricas", f"{m['area_poly']:,.2f}")
+    k[0].metric("Hectáreas teóricas", f"{m['area_poly']:,.2f}", help="Área del polígono del lote.")
     k[1].metric("Hectáreas aplicadas", f"{m['area_in']:,.2f}")
-    k[2].metric("% Cobertura", f"{m['cobertura']:.1f} %")
-    k[3].metric("% Eficiencia", f"{m['eficiencia']:.1f} %")
-    k[4].metric("Margen de error", f"{m['margen_error']:+.2f} %")
+    k[2].metric("% Cobertura", f"{m['cobertura']:.1f} %", help="Área aplicada dentro del polígono / área del polígono. Indica qué parte del lote se logró tratar. Los gaps la bajan.")
+    k[3].metric("% Eficiencia", f"{m['eficiencia']:.1f} %", help="Área aplicada con una sola pasada / área aplicada total. Baja si hay traslape o aplicación fuera del polígono.")
+    k[4].metric("Margen de error", f"{m['margen_error']:+.2f} %", help="(Área aplicada total - área del polígono) / área del polígono. Negativo: se aplicó menos de lo que mide el lote.")
     k = st.columns(4)
     k[0].metric("Traslape (ha)", f"{m['area_overlap']:,.2f}")
     k[1].metric("Fuera del polígono (ha)", f"{m['area_out']:,.2f}")
     k[2].metric("Omitida / gaps (ha)", f"{m['area_gap']:,.2f}")
     k[3].metric("Pasadas / giros", f"{m['n_runs']} / {m['n_turns']}")
-    st.image(res["png"], use_container_width=True)
+    with st.expander("ℹ️ ¿Qué significan estos indicadores?"):
+        st.markdown(
+            "- **Cobertura** = área aplicada dentro del polígono ÷ área del polígono. "
+            "Responde qué parte del lote se logró tratar; las zonas omitidas (gaps) la bajan.\n"
+            "- **Eficiencia** = área aplicada con una sola pasada ÷ área aplicada total. "
+            "Responde cuánto de lo aplicado cayó donde debía y sin repetirse; el traslape y lo aplicado "
+            "fuera del polígono la bajan.\n"
+            "- **Traslape** = zona dentro del polígono cubierta por 2 o más pasadas.\n"
+            "- **Margen de error** = (área aplicada total − área del polígono) ÷ área del polígono."
+        )
+    st.image(res.get("report_png") or res["png"], use_container_width=True)
     d1, d2, d3 = st.columns(3)
     d1.download_button("⬇️ Descargar PDF (1 página)", res["pdf"], "reporte_aplicacion.pdf", "application/pdf")
-    d2.download_button("⬇️ Descargar mapa (PNG)", res["png"], "mapa_aplicacion.png", "image/png")
+    if res.get("report_png"):
+        d2.download_button("⬇️ Descargar informe completo (PNG)", res["report_png"],
+                           "informe_aplicacion.png", "image/png")
+    else:
+        d2.download_button("⬇️ Descargar mapa (PNG)", res["png"], "mapa_aplicacion.png", "image/png")
     d3.download_button("⬇️ Descargar tabla (CSV)", res["table"].to_csv(index=False).encode("utf-8-sig"),
                        "detalle_poligonos.csv", "text/csv")
     with st.expander("Detalle por polígono"):
